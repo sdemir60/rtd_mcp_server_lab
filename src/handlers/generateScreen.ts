@@ -1,109 +1,205 @@
-import { ScreenGenerationRequest } from '../types/index.js';
-import { getContractTemplate } from '../templates/contract.js';
-import { getViewModelTemplate } from '../templates/viewModel.js';
-import { getViewTemplate } from '../templates/view.js';
-import { getServiceTemplate } from '../templates/service.js';
-import { getControllerTemplate } from '../templates/controller.js';
+import { z } from 'zod';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import * as os from 'os';
+
+// Import template functions
+import { 
+  getListTemplate, 
+  getFormTemplate, 
+  getContractTemplate,
+  getRequestTemplate,
+  getResponseTemplate,
+  getServiceTemplate,
+  getControllerTemplate,
+  getResourceRegistrationTemplate,
+  getViewCodeBehindTemplate
+} from '../templates/index.js';
+
+interface Field {
+  name: string;
+  displayName: string;
+  constraints?: string[];
+}
+
+interface GenerateScreenParams {
+  tableName: string;
+  screenTitle: string;
+  schema: string;
+  namespacePart: string;
+  fields: Field[];
+  resourceIdList: number;
+  resourceIdForm: number;
+}
+
+// Request schema
+const GenerateScreenSchema = z.object({
+  tableName: z.string(),
+  screenTitle: z.string(),
+  schema: z.string(),
+  fields: z.array(z.object({
+    name: z.string(),
+    displayName: z.string(),
+    constraints: z.array(z.string()).optional()
+  }))
+});
 
 export async function generateScreenHandler(args: unknown) {
-  const request = args as ScreenGenerationRequest;
+  // Validate input
+  const request = GenerateScreenSchema.parse(args);
   
-  // Temel alan tanımlamalarını hazırla
-  const baseFields = [
-    { name: 'Id', displayName: 'Id', constraints: ['Primary'] },
-    { name: 'InsertUserId', displayName: 'Kayıt Eden Kullanıcı Id', constraints: [] },
-    { name: 'InsertDate', displayName: 'Kayıt Tarihi / Saati', constraints: [] },
-    { name: 'UpdateUserId', displayName: 'Son Güncelleyen Kullanıcı Id', constraints: [] },
-    { name: 'UpdateDate', displayName: 'Son Güncelleme Tarihi / Saati', constraints: [] },
-    { name: 'IsActive', displayName: 'Kayıt Aktif Mi', constraints: ['IndexA'] },
-  ];
-  
-  // Kullanıcının verdiği alanları ekle (Id hariç, çünkü zaten var)
-  const customFields = request.fields.filter(f => f.name !== 'Id');
-  const allFields = [
-    baseFields[0], // Id
-    ...customFields.filter(f => !baseFields.some(bf => bf.name === f.name)),
-    ...baseFields.slice(1) // Diğer sistem alanları
-  ];
-  
-  // Şablon parametrelerini hazırla
-  const params = {
+  // Prepare parameters
+  const params: GenerateScreenParams = {
     tableName: request.tableName,
     screenTitle: request.screenTitle,
     schema: request.schema,
-    fields: allFields,
+    fields: request.fields,
+    namespacePart: request.schema === 'Common' ? 'General' : request.schema,
+    resourceIdList: Math.floor(Math.random() * 1000) + 9000,
+    resourceIdForm: Math.floor(Math.random() * 1000) + 9000 + 1000
   };
   
-  // Tüm dosyaları üret
+  // Define files to generate
   const files = [
     {
-      name: `${request.tableName}Contract.cs`,
-      content: getContractTemplate(params),
-      description: 'Data Contract dosyası'
+      name: `${request.tableName}List.cs`,
+      content: getListTemplate(params),
+      path: 'Lists'
     },
     {
-      name: `${request.tableName}ViewModel.cs`,
-      content: getViewModelTemplate(params),
-      description: 'ViewModel dosyası'
-    },
-    {
-      name: `${request.tableName}View.xaml`,
-      content: getViewTemplate(params),
-      description: 'XAML View dosyası'
+      name: `${request.tableName}Form.cs`,
+      content: getFormTemplate(params),
+      path: 'Forms'
     },
     {
       name: `${request.tableName}View.xaml.cs`,
       content: getViewCodeBehindTemplate(params),
-      description: 'View Code-Behind dosyası'
+      path: 'Views'
+    },
+    {
+      name: `${request.tableName}Contract.cs`,
+      content: getContractTemplate(params),
+      path: 'Contracts'
+    },
+    {
+      name: `${request.tableName}Request.cs`,
+      content: getRequestTemplate(params),
+      path: 'Contracts'
+    },
+    {
+      name: `${request.tableName}Response.cs`,
+      content: getResponseTemplate(params),
+      path: 'Contracts'
     },
     {
       name: `${request.tableName}Service.cs`,
       content: getServiceTemplate(params),
-      description: 'Service dosyası'
+      path: 'Services'
     },
     {
       name: `${request.tableName}Controller.cs`,
       content: getControllerTemplate(params),
-      description: 'API Controller dosyası'
+      path: 'Controllers'
+    },
+    {
+      name: `${request.tableName}_ResourceRegistration.sql`,
+      content: getResourceRegistrationTemplate(params),
+      path: 'SQL'
     }
   ];
   
-  // Sonuçları formatla
-  let result = `# ${request.screenTitle} Ekranı Kodları\n\n`;
-  result += `Tablo: ${request.schema}.${request.tableName}\n\n`;
-  
-  for (const file of files) {
-    result += `## ${file.name} - ${file.description}\n\n`;
-    result += '```csharp\n';
-    result += file.content;
-    result += '\n```\n\n';
-  }
-  
-  return {
-    content: [
-      {
-        type: 'text',
-        text: result,
-      },
-    ],
-  };
-}
-
-// View Code-Behind template helper
-function getViewCodeBehindTemplate(params: any): string {
-  return `using System.Windows.Controls;
-
-namespace YourProject.Views.${params.schema}
-{
-    /// <summary>
-    /// ${params.screenTitle} ekranı
-    /// </summary>
-    public partial class ${params.tableName}View : UserControl
-    {
-        public ${params.tableName}View()
-        {
-            InitializeComponent();
-        }
+  try {
+    // Get desktop path
+    const desktopPath = path.join(os.homedir(), 'Desktop');
+    
+    // Create main folder with screen name
+    const folderName = `${request.tableName}_${request.screenTitle.replace(/\s+/g, '_')}`;
+    const mainFolderPath = path.join(desktopPath, folderName);
+    
+    // Create main folder
+    await fs.mkdir(mainFolderPath, { recursive: true });
+    
+    // Create subfolders and write files
+    for (const file of files) {
+      const subfolder = path.join(mainFolderPath, file.path);
+      await fs.mkdir(subfolder, { recursive: true });
+      
+      const filePath = path.join(subfolder, file.name);
+      await fs.writeFile(filePath, file.content, 'utf8');
     }
-}`;
+    
+    // Create a summary README file
+    const readmeContent = `# ${request.screenTitle} Ekranı Dosyaları
+
+Tablo: ${request.schema}.${request.tableName}
+Oluşturulma Tarihi: ${new Date().toLocaleString('tr-TR')}
+
+## Dosya Yapısı
+
+- **Lists/**
+  - ${request.tableName}List.cs - Liste ekranı
+
+- **Forms/**
+  - ${request.tableName}Form.cs - Form ekranı
+
+- **Views/**
+  - ${request.tableName}View.xaml.cs - WPF View Code-Behind
+
+- **Contracts/**
+  - ${request.tableName}Contract.cs - Data contract
+  - ${request.tableName}Request.cs - Request contract
+  - ${request.tableName}Response.cs - Response contract
+
+- **Services/**
+  - ${request.tableName}Service.cs - Business service
+
+- **Controllers/**
+  - ${request.tableName}Controller.cs - API controller
+
+- **SQL/**
+  - ${request.tableName}_ResourceRegistration.sql - Resource kayıt scripti
+
+## Kullanım
+
+1. İlgili dosyaları projenizin uygun klasörlerine kopyalayın
+2. SQL scriptini veritabanında çalıştırın
+3. Namespace'leri projenize göre düzenleyin
+`;
+    
+    await fs.writeFile(path.join(mainFolderPath, 'README.md'), readmeContent, 'utf8');
+    
+    // Format result message
+    let result = `# ✅ ${request.screenTitle} Ekranı Başarıyla Oluşturuldu!\n\n`;
+    result += `📁 **Konum:** ${mainFolderPath}\n\n`;
+    result += `## Oluşturulan Dosyalar:\n\n`;
+    
+    for (const file of files) {
+      result += `- ✓ ${file.path}/${file.name}\n`;
+    }
+    
+    result += `\n## Sonraki Adımlar:\n\n`;
+    result += `1. Masaüstünüzde "${folderName}" klasörünü bulun\n`;
+    result += `2. Dosyaları projenizin ilgili klasörlerine kopyalayın\n`;
+    result += `3. SQL scriptini veritabanında çalıştırın\n`;
+    result += `4. Namespace ve referansları kontrol edin\n`;
+    
+    return {
+      content: [
+        {
+          type: 'text',
+          text: result,
+        },
+      ],
+    };
+    
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `❌ Hata: Dosyalar oluşturulurken bir hata oluştu.\n\nDetay: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}\n\nLütfen yetkilendirme ayarlarını kontrol edin.`,
+        },
+      ],
+    };
+  }
 }
