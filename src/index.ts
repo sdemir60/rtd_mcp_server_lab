@@ -45,7 +45,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             schema: {
               type: 'string',
-              description: 'Şema adı (örn: Common)',
+              description: 'Şema adı (örn: common)',
+            },
+            namespace: {
+              type: 'string',
+              description: 'Namespace (örn: General, Common)',
             },
             fields: {
               type: 'array',
@@ -74,7 +78,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               },
             },
           },
-          required: ['tableName', 'screenTitle', 'schema', 'fields'],
+          required: ['tableName', 'screenTitle', 'schema', 'namespace', 'fields'],
         },
       },
       {

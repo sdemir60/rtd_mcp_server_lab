@@ -10,6 +10,7 @@ export interface ScreenGenerationRequest {
   tableName: string;
   screenTitle: string;
   schema: string;
+  namespace: string; // Yeni eklendi
   fields: TableField[];
 }
 
