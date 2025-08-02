@@ -6,11 +6,17 @@ import * as os from 'os';
 export async function generateScreenHandler(args: unknown) {
   const request = args as ScreenGenerationRequest;
   
-  // Temporary output directory oluştur
+  // Masaüstüne output klasörü oluştur
   const tempDir = path.join(os.homedir(), 'Desktop', `${request.tableName}_Generated`);
   
   try {
     await fs.mkdir(tempDir, { recursive: true });
+    
+    // Alt klasörleri oluştur
+    const subDirs = ['Business', 'Orchestration', 'Types', 'UI', 'SQL'];
+    for (const dir of subDirs) {
+      await fs.mkdir(path.join(tempDir, dir), { recursive: true });
+    }
     
     const params = {
       tableName: request.tableName,
@@ -20,19 +26,66 @@ export async function generateScreenHandler(args: unknown) {
       fields: request.fields
     };
     
-    // Tüm dosyaları oluştur ve içeriklerini topla
+    // Dosyaları oluştur ve kaydet
     const files = await generateAllFiles(params, tempDir);
     
-    // Markdown formatında döndür
-    let result = `# ${request.screenTitle} Ekranı Oluşturuldu\n\n`;
-    result += `Toplam ${files.length} dosya oluşturuldu:\n\n`;
-    
+    // Her dosyayı uygun klasöre kaydet
+    let savedFiles = 0;
     for (const file of files) {
-      result += `## ${file.name}\n\n`;
-      result += '```' + file.language + '\n';
-      result += file.content;
-      result += '\n```\n\n';
+      try {
+        // Dosya adını temizle
+        let fileName = file.name
+          .replace(/[\[\]]/g, '')
+          .replace(/\./g, '_')
+          .replace(/\s+\(/g, '_')
+          .replace(/\)/g, '')
+          .replace(/:/g, '_');
+        
+        // Uzantı ekle
+        if (file.language === 'csharp') fileName += '.cs';
+        else if (file.language === 'sql') fileName += '.sql';
+        else if (file.language === 'xml') fileName += '.xaml';
+        else fileName += '.txt';
+        
+        // Hangi klasöre gideceğini belirle
+        let subDir = '';
+        if (file.name.includes('Business')) subDir = 'Business';
+        else if (file.name.includes('Orchestration')) subDir = 'Orchestration';
+        else if (file.name.includes('Contract') || file.name.includes('Request')) subDir = 'Types';
+        else if (file.name.includes('.xaml') || file.name.includes('List') || file.name.includes('Form')) subDir = 'UI';
+        else if (file.language === 'sql') subDir = 'SQL';
+        
+        const filePath = subDir 
+          ? path.join(tempDir, subDir, fileName)
+          : path.join(tempDir, fileName);
+        
+        await fs.writeFile(filePath, file.content, 'utf8');
+        savedFiles++;
+      } catch (error) {
+        console.error(`Dosya kaydedilemedi: ${file.name}`, error);
+      }
     }
+    
+    // Başarı mesajı döndür
+    let result = `# ✅ ${request.screenTitle} Ekranı Başarıyla Oluşturuldu!\n\n`;
+    result += `📁 **Konum:** ${tempDir}\n\n`;
+    result += `📊 **Özet:**\n`;
+    result += `- Toplam ${savedFiles} dosya oluşturuldu\n`;
+    result += `- ${subDirs.length} klasör organize edildi\n\n`;
+    result += `📂 **Klasör Yapısı:**\n`;
+    result += `\`\`\`\n`;
+    result += `${request.tableName}_Generated/\n`;
+    result += `├── Business/     (${files.filter(f => f.name.includes('Business')).length} dosya)\n`;
+    result += `├── Orchestration/ (${files.filter(f => f.name.includes('Orchestration')).length} dosya)\n`;
+    result += `├── Types/        (${files.filter(f => f.name.includes('Contract') || f.name.includes('Request')).length} dosya)\n`;
+    result += `├── UI/           (${files.filter(f => f.name.includes('.xaml') || f.name.includes('List') || f.name.includes('Form')).length} dosya)\n`;
+    result += `└── SQL/          (${files.filter(f => f.language === 'sql').length} dosya)\n`;
+    result += `\`\`\`\n\n`;
+    result += `## 🚀 Sonraki Adımlar:\n`;
+    result += `1. Masaüstünüzdeki **${request.tableName}_Generated** klasörünü açın\n`;
+    result += `2. Dosyaları projenizin ilgili yerlerine kopyalayın\n`;
+    result += `3. SQL scriptlerini sırasıyla çalıştırın (önce tablo, sonra SP'ler)\n`;
+    result += `4. Resource registration script'ini çalıştırın\n`;
     
     return {
       content: [
@@ -48,7 +101,7 @@ export async function generateScreenHandler(args: unknown) {
       content: [
         {
           type: 'text',
-          text: `Hata: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}`,
+          text: `❌ **Hata Oluştu!**\n\n${error instanceof Error ? error.message : 'Bilinmeyen hata'}\n\nLütfen tekrar deneyin veya yöneticinize başvurun.`,
         },
       ],
     };
