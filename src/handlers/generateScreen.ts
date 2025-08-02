@@ -3,6 +3,177 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 
+export async function generateScreenHandler(args: unknown) {
+  const request = args as ScreenGenerationRequest;
+  
+  // Temporary output directory oluştur
+  const tempDir = path.join(os.tmpdir(), 'rtd-generated-files');
+  
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    
+    const params = {
+      tableName: request.tableName,
+      screenTitle: request.screenTitle,
+      schema: request.schema,
+      namespace: request.namespace,
+      fields: request.fields
+    };
+    
+    // Tüm dosyaları oluştur ve içeriklerini topla
+    const files = await generateAllFiles(params, tempDir);
+    
+    // Markdown formatında döndür
+    let result = `# ${request.screenTitle} Ekranı Oluşturuldu\n\n`;
+    result += `Toplam ${files.length} dosya oluşturuldu:\n\n`;
+    
+    for (const file of files) {
+      result += `## ${file.name}\n\n`;
+      result += '```' + file.language + '\n';
+      result += file.content;
+      result += '\n```\n\n';
+    }
+    
+    return {
+      content: [
+        {
+          type: 'text',
+          text: result,
+        },
+      ],
+    };
+    
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Hata: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}`,
+        },
+      ],
+    };
+  }
+}
+
+async function generateAllFiles(params: any, tempDir: string) {
+  const files = [];
+  
+  // Business Layer
+  files.push({
+    name: `${params.tableName}.designer.cs (Business)`,
+    content: generateBusinessDesignerCs(params),
+    language: 'csharp'
+  });
+  
+  files.push({
+    name: `${params.tableName}.cs (Business)`,
+    content: generateBusinessCs(params),
+    language: 'csharp'
+  });
+  
+  // Orchestration Layer
+  files.push({
+    name: `${params.tableName}.designer.cs (Orchestration)`,
+    content: generateOrchestrationDesignerCs(params),
+    language: 'csharp'
+  });
+  
+  files.push({
+    name: `${params.tableName}.cs (Orchestration)`,
+    content: generateOrchestrationCs(params),
+    language: 'csharp'
+  });
+  
+  // Contract Layer
+  files.push({
+    name: `${params.tableName}Contract.designer.cs`,
+    content: generateContractDesignerCs(params),
+    language: 'csharp'
+  });
+  
+  files.push({
+    name: `${params.tableName}Contract.cs`,
+    content: generateContractCs(params),
+    language: 'csharp'
+  });
+  
+  files.push({
+    name: `${params.tableName}Request.designer.cs`,
+    content: generateRequestDesignerCs(params),
+    language: 'csharp'
+  });
+  
+  files.push({
+    name: `${params.tableName}Request.cs`,
+    content: generateRequestCs(params),
+    language: 'csharp'
+  });
+  
+  // UI Layer
+  files.push({
+    name: `${params.tableName}List.xaml`,
+    content: generateListXaml(params),
+    language: 'xml'
+  });
+  
+  files.push({
+    name: `${params.tableName}List.xaml.cs`,
+    content: generateListCs(params),
+    language: 'csharp'
+  });
+  
+  files.push({
+    name: `${params.tableName}Form.xaml`,
+    content: generateFormXaml(params),
+    language: 'xml'
+  });
+  
+  files.push({
+    name: `${params.tableName}Form.xaml.cs`,
+    content: generateFormCs(params),
+    language: 'csharp'
+  });
+  
+  // SQL Scripts
+  files.push({
+    name: `[${params.schema}].[${params.tableName}] (Table)`,
+    content: generateTableScript(params),
+    language: 'sql'
+  });
+  
+  files.push({
+    name: `[${params.schema}].[del_${params.tableName}]`,
+    content: generateDeleteProc(params),
+    language: 'sql'
+  });
+  
+  files.push({
+    name: `[${params.schema}].[ins_${params.tableName}]`,
+    content: generateInsertProc(params),
+    language: 'sql'
+  });
+  
+  files.push({
+    name: `[${params.schema}].[sel_${params.tableName}]`,
+    content: generateSelectProc(params),
+    language: 'sql'
+  });
+  
+  files.push({
+    name: `[${params.schema}].[sel_${params.tableName}ByKey]`,
+    content: generateSelectByKeyProc(params),
+    language: 'sql'
+  });
+  
+  files.push({
+    name: `[${params.schema}].[upd_${params.tableName}]`,
+    content: generateUpdateProc(params),
+    language: 'sql'
+  });
+  
+  return files;
+}
+
 // Helper functions
 function getFieldType(fieldName: string): string {
   const typeMap: { [key: string]: string } = {
