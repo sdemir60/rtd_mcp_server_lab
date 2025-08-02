@@ -7,7 +7,7 @@ export async function generateScreenHandler(args: unknown) {
   const request = args as ScreenGenerationRequest;
   
   // Temporary output directory oluştur
-  const tempDir = path.join(os.tmpdir(), 'rtd-generated-files');
+  const tempDir = path.join(os.homedir(), 'Desktop', `${request.tableName}_Generated`);
   
   try {
     await fs.mkdir(tempDir, { recursive: true });
