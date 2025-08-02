@@ -33,31 +33,22 @@ export async function generateScreenHandler(args: unknown) {
     let savedFiles = 0;
     for (const file of files) {
       try {
-        // Dosya adını temizle
-        let fileName = file.name
-          .replace(/[\[\]]/g, '')
-          .replace(/\./g, '_')
-          .replace(/\s+\(/g, '_')
-          .replace(/\)/g, '')
-          .replace(/:/g, '_');
+        // Dosya adını temizle ve uzantı ekle
+        let fileName = file.name;
         
-        // Uzantı ekle
-        if (file.language === 'csharp') fileName += '.cs';
-        else if (file.language === 'sql') fileName += '.sql';
-        else if (file.language === 'xml') fileName += '.xaml';
-        else fileName += '.txt';
+        // SQL dosyaları için temizlik
+        if (file.language === 'sql') {
+          fileName = fileName
+            .replace(/[\[\]]/g, '')
+            .replace(/\./g, '_')
+            .replace(/:/g, '_') + '.sql';
+        }
+
+        // C# dosyaları zaten .cs ile bitiyor, tekrar ekleme
+        // XAML dosyaları zaten .xaml ile bitiyor, tekrar ekleme
         
-        // Hangi klasöre gideceğini belirle
-        let subDir = '';
-        if (file.name.includes('Business')) subDir = 'Business';
-        else if (file.name.includes('Orchestration')) subDir = 'Orchestration';
-        else if (file.name.includes('Contract') || file.name.includes('Request')) subDir = 'Types';
-        else if (file.name.includes('.xaml') || file.name.includes('List') || file.name.includes('Form')) subDir = 'UI';
-        else if (file.language === 'sql') subDir = 'SQL';
-        
-        const filePath = subDir 
-          ? path.join(tempDir, subDir, fileName)
-          : path.join(tempDir, fileName);
+        // Folder bilgisini kullan
+        const filePath = path.join(tempDir, file.folder, fileName);
         
         await fs.writeFile(filePath, file.content, 'utf8');
         savedFiles++;
@@ -113,115 +104,133 @@ async function generateAllFiles(params: any, tempDir: string) {
   
   // Business Layer
   files.push({
-    name: `${params.tableName}.designer.cs (Business)`,
+    name: `${params.tableName}.designer.cs`,
     content: generateBusinessDesignerCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'Business'
   });
   
   files.push({
-    name: `${params.tableName}.cs (Business)`,
+    name: `${params.tableName}.cs`,
     content: generateBusinessCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'Business'
   });
   
   // Orchestration Layer
   files.push({
-    name: `${params.tableName}.designer.cs (Orchestration)`,
+    name: `${params.tableName}.designer.cs`,
     content: generateOrchestrationDesignerCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'Orchestration'
   });
   
   files.push({
-    name: `${params.tableName}.cs (Orchestration)`,
+    name: `${params.tableName}.cs`,
     content: generateOrchestrationCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'Orchestration'
   });
   
   // Contract Layer
   files.push({
     name: `${params.tableName}Contract.designer.cs`,
     content: generateContractDesignerCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'Types'
   });
   
   files.push({
     name: `${params.tableName}Contract.cs`,
     content: generateContractCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'Types'
   });
   
   files.push({
     name: `${params.tableName}Request.designer.cs`,
     content: generateRequestDesignerCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'Types'
   });
   
   files.push({
     name: `${params.tableName}Request.cs`,
     content: generateRequestCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'Types'
   });
   
   // UI Layer
   files.push({
     name: `${params.tableName}List.xaml`,
     content: generateListXaml(params),
-    language: 'xml'
+    language: 'xml',
+    folder: 'UI'
   });
   
   files.push({
     name: `${params.tableName}List.xaml.cs`,
     content: generateListCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'UI'
   });
   
   files.push({
     name: `${params.tableName}Form.xaml`,
     content: generateFormXaml(params),
-    language: 'xml'
+    language: 'xml',
+    folder: 'UI'
   });
   
   files.push({
     name: `${params.tableName}Form.xaml.cs`,
     content: generateFormCs(params),
-    language: 'csharp'
+    language: 'csharp',
+    folder: 'UI'
   });
   
   // SQL Scripts
   files.push({
-    name: `[${params.schema}].[${params.tableName}] (Table)`,
+    name: `[${params.schema}].[${params.tableName}]`,
     content: generateTableScript(params),
-    language: 'sql'
+    language: 'sql',
+    folder: 'SQL'
   });
   
   files.push({
     name: `[${params.schema}].[del_${params.tableName}]`,
     content: generateDeleteProc(params),
-    language: 'sql'
+    language: 'sql',
+    folder: 'SQL'
   });
   
   files.push({
     name: `[${params.schema}].[ins_${params.tableName}]`,
     content: generateInsertProc(params),
-    language: 'sql'
+    language: 'sql',
+    folder: 'SQL'
   });
   
   files.push({
     name: `[${params.schema}].[sel_${params.tableName}]`,
     content: generateSelectProc(params),
-    language: 'sql'
+    language: 'sql',
+    folder: 'SQL'
   });
   
   files.push({
     name: `[${params.schema}].[sel_${params.tableName}ByKey]`,
     content: generateSelectByKeyProc(params),
-    language: 'sql'
+    language: 'sql',
+    folder: 'SQL'
   });
   
   files.push({
     name: `[${params.schema}].[upd_${params.tableName}]`,
     content: generateUpdateProc(params),
-    language: 'sql'
+    language: 'sql',
+    folder: 'SQL'
   });
   
   return files;
