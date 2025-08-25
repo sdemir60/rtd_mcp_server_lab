@@ -99,7 +99,7 @@ public string Code
 ### 3. Standart Sorgulama
 
 ```
-Property tanımlama standartları nelerdir?
+Yetki kontrolü standartları nelerdir?
 ```
 
 ## 📁 Proje Yapısı

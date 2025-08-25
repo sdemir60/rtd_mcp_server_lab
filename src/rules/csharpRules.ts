@@ -1,70 +1,75 @@
 export const csharpRules = [
   {
-    name: 'property-setter-check',
+    name: "property-setter-check",
     check: (code: string) => {
       const violations: any[] = [];
-      
+
       // Property setter pattern'ini ara
-      const propertyRegex = /public\s+\w+\s+(\w+)\s*\{[^}]*get[^}]*set\s*\{([^}]+)\}[^}]*\}/g;
+      const propertyRegex =
+        /public\s+\w+\s+(\w+)\s*\{[^}]*get[^}]*set\s*\{([^}]+)\}[^}]*\}/g;
       let match;
-      
+
       while ((match = propertyRegex.exec(code)) !== null) {
         const propertyName = match[1];
         const setterContent = match[2];
-        
+
         // Koşul kontrolü var mı bak
-        const hasConditionCheck = setterContent.includes('if') && 
-                                 (setterContent.includes('!=') || setterContent.includes('!=='));
-        
+        const hasConditionCheck =
+          setterContent.includes("if") &&
+          (setterContent.includes("!=") || setterContent.includes("!=="));
+
         if (!hasConditionCheck) {
           // Satır numarasını bul
           const beforeMatch = code.substring(0, match.index);
           const lineNumber = (beforeMatch.match(/\n/g) || []).length + 1;
-          
+
           violations.push({
             line: lineNumber,
-            rule: 'Property Setter Koşul Kontrolü',
+            rule: "Property Setter Koşul Kontrolü",
             message: `Property "${propertyName}" setter'ında değer değişiklik kontrolü yapılmalıdır.`,
-            severity: 'error',
-            suggestion: `if (${propertyName.toLowerCase()} != value) { ${propertyName.toLowerCase()} = value; OnPropertyChanged("${propertyName}"); }`
+            severity: "error",
+            suggestion: `if (${propertyName.toLowerCase()} != value) { ${propertyName.toLowerCase()} = value; OnPropertyChanged("${propertyName}"); }`,
           });
         }
       }
-      
+
       // Alternatif pattern - daha basit setter'lar için
       const simpleSetterRegex = /set\s*\{([^}]+)\}/g;
       let setterMatch;
-      
+
       while ((setterMatch = simpleSetterRegex.exec(code)) !== null) {
         const setterContent = setterMatch[1];
-        
+
         // OnPropertyChanged var ama koşul yok
-        if (setterContent.includes('OnPropertyChanged') && 
-            !setterContent.includes('if') && 
-            !setterContent.includes('!=')) {
-          
+        if (
+          setterContent.includes("OnPropertyChanged") &&
+          !setterContent.includes("if") &&
+          !setterContent.includes("!=")
+        ) {
           const beforeMatch = code.substring(0, setterMatch.index);
           const lineNumber = (beforeMatch.match(/\n/g) || []).length + 1;
-          
+
           violations.push({
             line: lineNumber,
-            rule: 'Property Setter Koşul Kontrolü',
-            message: 'Property setter içinde değer değişiklik kontrolü yapılmalıdır.',
-            severity: 'error',
-            suggestion: 'if (field != value) { field = value; OnPropertyChanged("PropertyName"); }'
+            rule: "Property Setter Koşul Kontrolü",
+            message:
+              "Property setter içinde değer değişiklik kontrolü yapılmalıdır.",
+            severity: "error",
+            suggestion:
+              'if (field != value) { field = value; OnPropertyChanged("PropertyName"); }',
           });
         }
       }
-      
+
       return violations;
-    }
+    },
   },
   {
-    name: 'naming-convention',
+    name: "naming-convention",
     check: (code: string) => {
       const violations: any[] = [];
-      const lines = code.split('\n');
-      
+      const lines = code.split("\n");
+
       lines.forEach((line, index) => {
         // Private field naming
         const privateFieldMatch = line.match(/private\s+\w+\s+(\w+);/);
@@ -73,14 +78,16 @@ export const csharpRules = [
           if (fieldName[0] !== fieldName[0].toLowerCase()) {
             violations.push({
               line: index + 1,
-              rule: 'Private Field İsimlendirme',
+              rule: "Private Field İsimlendirme",
               message: `Private field "${fieldName}" küçük harfle başlamalıdır.`,
-              severity: 'warning',
-              suggestion: `${fieldName.charAt(0).toLowerCase() + fieldName.slice(1)}`
+              severity: "warning",
+              suggestion: `${
+                fieldName.charAt(0).toLowerCase() + fieldName.slice(1)
+              }`,
             });
           }
         }
-        
+
         // Public property naming
         const publicPropertyMatch = line.match(/public\s+\w+\s+(\w+)\s*{/);
         if (publicPropertyMatch && publicPropertyMatch[1]) {
@@ -88,69 +95,157 @@ export const csharpRules = [
           if (propertyName[0] !== propertyName[0].toUpperCase()) {
             violations.push({
               line: index + 1,
-              rule: 'Public Property İsimlendirme',
+              rule: "Public Property İsimlendirme",
               message: `Public property "${propertyName}" büyük harfle başlamalıdır.`,
-              severity: 'warning',
-              suggestion: `${propertyName.charAt(0).toUpperCase() + propertyName.slice(1)}`
+              severity: "warning",
+              suggestion: `${
+                propertyName.charAt(0).toUpperCase() + propertyName.slice(1)
+              }`,
             });
           }
         }
       });
-      
+
       return violations;
-    }
+    },
   },
   {
-    name: 'infinite-loop-risk',
+    name: "infinite-loop-risk",
     check: (code: string) => {
       const violations: any[] = [];
-      
+
       // Setter içinde koşulsuz atama kontrolü
-      const setterPattern = /set\s*\{[^}]*(\w+)\s*=\s*value;[^}]*OnPropertyChanged[^}]*\}/g;
+      const setterPattern =
+        /set\s*\{[^}]*(\w+)\s*=\s*value;[^}]*OnPropertyChanged[^}]*\}/g;
       let match;
-      
+
       while ((match = setterPattern.exec(code)) !== null) {
         const setterContent = match[0];
-        
+
         // if koşulu yoksa sonsuz döngü riski var
-        if (!setterContent.includes('if')) {
+        if (!setterContent.includes("if")) {
           const beforeMatch = code.substring(0, match.index);
           const lineNumber = (beforeMatch.match(/\n/g) || []).length + 1;
-          
+
           violations.push({
             line: lineNumber,
-            rule: 'Sonsuz Döngü Riski',
-            message: 'Property setter içinde koşulsuz atama sonsuz döngüye sebep olabilir.',
-            severity: 'error',
-            suggestion: 'Değer ataması öncesi mutlaka if (field != value) kontrolü yapın'
+            rule: "Sonsuz Döngü Riski",
+            message:
+              "Property setter içinde koşulsuz atama sonsuz döngüye sebep olabilir.",
+            severity: "error",
+            suggestion:
+              "Değer ataması öncesi mutlaka if (field != value) kontrolü yapın",
           });
         }
       }
-      
+
       return violations;
-    }
+    },
   },
   {
-    name: 'string-null-check',
+    name: "string-null-check",
     check: (code: string) => {
       const violations: any[] = [];
-      const lines = code.split('\n');
-      
+      const lines = code.split("\n");
+
       lines.forEach((line, index) => {
         // String null kontrolü
-        if ((line.includes('== null') || line.includes('!= null')) && 
-            (line.includes('string') || line.toLowerCase().includes('text'))) {
+        if (
+          (line.includes("== null") || line.includes("!= null")) &&
+          (line.includes("string") || line.toLowerCase().includes("text"))
+        ) {
           violations.push({
             line: index + 1,
-            rule: 'String Null Kontrolü',
-            message: 'String null kontrolü için String.IsNullOrEmpty kullanılmalıdır.',
-            severity: 'warning',
-            suggestion: 'string.IsNullOrEmpty(value) veya string.IsNullOrWhiteSpace(value)'
+            rule: "String Null Kontrolü",
+            message:
+              "String null kontrolü için String.IsNullOrEmpty kullanılmalıdır.",
+            severity: "warning",
+            suggestion:
+              "string.IsNullOrEmpty(value) veya string.IsNullOrWhiteSpace(value)",
           });
         }
       });
-      
+
       return violations;
-    }
-  }
+    },
+  },
+  {
+    name: "authorization-check",
+    check: (code: string) => {
+      const violations: any[] = [];
+      const lines = code.split("\n");
+
+      lines.forEach((line, index) => {
+        // CanExecute metodlarında yetki kontrolü
+        if (
+          line.includes("CanExecute()") ||
+          (line.includes("Can") && line.includes("Execute"))
+        ) {
+          const methodContent = lines.slice(index, index + 10).join("\n");
+
+          if (
+            !methodContent.includes("ResourceActionList") &&
+            !methodContent.includes("ResourceInfo")
+          ) {
+            violations.push({
+              line: index + 1,
+              rule: "Command Yetki Kontrolü",
+              message:
+                "CanExecute metodunda ResourceActionList kontrolü yapılmalıdır.",
+              severity: "error",
+              suggestion:
+                'this.ResourceInfo.ResourceActionList.Find(x => x.CommandName == "CommandName") != null',
+            });
+          }
+        }
+
+        // Event handler'larda yetki kontrolü
+        if (
+          (line.includes("_Click") || line.includes("_DoubleClick")) &&
+          line.includes("void") &&
+          line.includes("(object sender")
+        ) {
+          const methodContent = lines.slice(index, index + 20).join("\n");
+
+          if (
+            !methodContent.includes("ResourceActionList") &&
+            !methodContent.includes("NoPermissionForOperation")
+          ) {
+            violations.push({
+              line: index + 1,
+              rule: "Event Handler Yetki Kontrolü",
+              message: "Event handler içinde yetki kontrolü yapılmalıdır.",
+              severity: "warning",
+              suggestion: "ResourceInfo.ResourceActionList kontrolü ekleyin",
+            });
+          }
+        }
+
+        // ShowStatusMessage ile NoPermissionForOperation kontrolü
+        if (
+          line.includes("ShowStatusMessage") &&
+          !line.includes("NoPermissionForOperation") &&
+          !line.includes("Error") &&
+          !line.includes("Success")
+        ) {
+          const surroundingLines = lines
+            .slice(Math.max(0, index - 5), index + 5)
+            .join("\n");
+          if (surroundingLines.includes("ResourceActionList")) {
+            violations.push({
+              line: index + 1,
+              rule: "Yetki Mesajı",
+              message:
+                "Yetki kontrolü sonrası NoPermissionForOperation mesajı gösterilmelidir.",
+              severity: "info",
+              suggestion:
+                "ShowStatusMessage(langGlobal.NoPermissionForOperation, DialogTypes.Info)",
+            });
+          }
+        }
+      });
+
+      return violations;
+    },
+  },
 ];
