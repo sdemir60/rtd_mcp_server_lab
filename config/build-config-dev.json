@@ -1,0 +1,43 @@
+{
+  "versionControlPaths": [
+    {
+      "path": "D:/OSYSTFS/OSYS",
+      "type": "git"
+    },
+    {
+      "path": "D:/OSYSTFS/Service", 
+      "type": "tfs"
+    }
+  ],
+  "projects": [
+    {
+      "path": "D:/OSYSTFS/OSYS/UsedCars/OSYS.UsedCar/OSYS.Types.General/OSYS.Types.General.csproj",
+      "name": "OSYS.Types.General"
+    },
+    {
+      "path": "D:/OSYSTFS/OSYS/UsedCars/OSYS.UsedCar/OSYS.UI.General/OSYS.UI.General.csproj",
+      "name": "OSYS.UI.General",
+      "dependencies": ["OSYS.Types.General"]
+    },
+    {
+      "path": "D:/OSYSTFS/OSYS/UsedCars/OSYS.UsedCar/OSYS.Business.General/OSYS.Business.General.csproj",
+      "name": "OSYS.Business.General",
+      "dependencies": ["OSYS.Types.General"]
+    },
+    {
+      "path": "D:/OSYSTFS/OSYS/UsedCars/OSYS.UsedCar/OSYS.Orchestration.General/OSYS.Orchestration.General.csproj",
+      "name": "OSYS.Orchestration.General",
+      "dependencies": ["OSYS.Types.General", "OSYS.Business.General"]
+    },
+    {
+      "path": "D:/OSYSTFS/OSYS/OSYSShared/OSYS.UI.Shared/OSYS.UI.Shared.csproj",
+      "name": "OSYS.UI.Shared"
+    },
+    {
+      "path": "D:/OSYSTFS/OSYS/NewSales/New Sales/OSYS New Sales/OSYS.UI.NewSales/OSYS.UI.NewSales.csproj",
+      "name": "OSYS.UI.NewSales"
+    }
+  ],
+  "msbuildPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe",
+  "maxRetries": 5
+}
