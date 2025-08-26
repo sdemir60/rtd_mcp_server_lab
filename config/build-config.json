@@ -1,0 +1,35 @@
+{
+  "versionControlPaths": [
+    {
+      "path": "D:/OSYSTFS/OSYS",
+      "type": "git"
+    },
+    {
+      "path": "D:/OSYSTFS/Service", 
+      "type": "tfs"
+    }
+  ],
+  "projects": [
+    {
+      "path": "D:/OSYSTFS/OSYS/UsedCars/OSYS.UsedCar/OSYS.Types.General/OSYS.Types.General.csproj",
+      "name": "OSYS.Types.General"
+    },
+    {
+      "path": "D:/OSYSTFS/OSYS/UsedCars/OSYS.UsedCar/OSYS.UI.General/OSYS.UI.General.csproj",
+      "name": "OSYS.UI.General",
+      "dependencies": ["OSYS.Types.General"]
+    },
+    {
+      "path": "D:/OSYSTFS/OSYS/UsedCars/OSYS.UsedCar/OSYS.Business.General/OSYS.Business.General.csproj",
+      "name": "OSYS.Business.General",
+      "dependencies": ["OSYS.Types.General"]
+    },
+    {
+      "path": "D:/OSYSTFS/OSYS/UsedCars/OSYS.UsedCar/OSYS.Orchestration.General/OSYS.Orchestration.General.csproj",
+      "name": "OSYS.Orchestration.General",
+      "dependencies": ["OSYS.Types.General", "OSYS.Business.General"]
+    }
+  ],
+  "msbuildPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe",
+  "maxRetries": 5
+}

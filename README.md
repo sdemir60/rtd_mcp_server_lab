@@ -7,6 +7,7 @@ Kod üretimi ve standart kontrolü için MCP (Model Context Protocol) sunucusu.
 - **Ekran Kodu Üretimi**: Tablo bilgilerinden otomatik CRUD ekranı oluşturma
 - **Kod Standart Kontrolü**: C#, TypeScript ve SQL kodlarının standartlara uygunluk kontrolü
 - **Dokümantasyon Sorgulama**: Kodlama standartları hakkında bilgi alma
+- **Toplu Proje Derleme**: Version control güncelleme ve otomatik derleme sistemi
 
 ## 📋 Gereksinimler
 
@@ -102,6 +103,73 @@ public string Code
 Yetki kontrolü standartları nelerdir?
 ```
 
+## 🏗️ Toplu Proje Derleme
+
+### Konfigürasyon Dosyaları
+
+Proje root'unda `config` klasörü oluşturun ve aşağıdaki dosyaları ekleyin:
+
+```
+rtd_mcp_server_lab/
+├── config/
+│   ├── build-config.json          # Varsayılan config
+│   ├── build-config-dev.json      # Development config  
+│   ├── build-config-prod.json     # Production config
+│   └── build-config-test.json     # Test config
+```
+
+### Örnek Config Dosyası (build-config.json)
+
+```json
+{
+  "versionControlPaths": [
+    {
+      "path": "D:/OSYSTFS/OSYS",
+      "type": "git"
+    },
+    {
+      "path": "D:/OSYSTFS/Service", 
+      "type": "tfs"
+    }
+  ],
+  "projects": [
+    {
+      "path": "D:/Projects/OSYS.Types.General/OSYS.Types.General.csproj",
+      "name": "OSYS.Types.General"
+    },
+    {
+      "path": "D:/Projects/OSYS.UI.General/OSYS.UI.General.csproj",
+      "name": "OSYS.UI.General",
+      "dependencies": ["OSYS.Types.General"]
+    }
+  ],
+  "msbuildPath": "C:/Program Files/Microsoft Visual Studio/2022/Professional/MSBuild/Current/Bin/MSBuild.exe",
+  "maxRetries": 3
+}
+```
+
+### Kullanım Örnekleri
+
+```bash
+# Varsayılan config ile
+"Tüm projeleri derle"
+
+# Özel config ile  
+"Development projelerini derle"
+"Production projelerini derle"
+
+# Version control'siz sadece derleme
+"Projeleri derle" (versionControlPaths: [] olarak ayarlayın)
+```
+
+### Özellikler
+
+- ✅ Otomatik version control güncelleme (Git/TFS)
+- ✅ Akıllı yeniden deneme sistemi
+- ✅ Bağımlılık bazlı derleme sırası
+- ✅ Detaylı hata raporlama
+- ✅ Çoklu config dosyası desteği
+
 ## 📁 Proje Yapısı
 
 ```
@@ -113,6 +181,7 @@ rtd_mcp_server_lab/
 │   ├── templates/            # Kod üretim şablonları
 │   ├── rules/                # Kod kontrol kuralları
 │   └── documentation/        # Standart dokümantasyonu
+├── config/                   # Derleme konfigürasyon dosyaları
 ├── dist/                     # Derlenmiş dosyalar
 ├── package.json
 ├── tsconfig.json
