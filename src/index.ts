@@ -126,7 +126,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "build_all_projects",
         description:
-          "Tüm C# projelerini version control güncellemesi yaparak toplu olarak derler",
+          "Tüm C# projelerini version control (Git/TFS) güncellemesi yaparak toplu olarak derler",
         inputSchema: {
           type: "object",
           properties: {
@@ -166,29 +166,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 properties: {
                   path: {
                     type: "string",
-                    description:
-                      "Proje dosyası tam yolu (örn: C:/Projects/MyApp/MyApp.csproj)",
+                    description: "Proje yolu (.csproj ya da .sln)",
                   },
-                  name: { type: "string", description: "Proje adı" },
+                  name: { type: "string", description: "Görünen ad" },
                   dependencies: {
                     type: "array",
                     items: { type: "string" },
-                    description: "Bağımlı proje isimleri (opsiyonel)",
+                    description: "Bağımlı olduğu proje adları",
                   },
                 },
-                required: ["path", "name"],
+                required: ["path"],
               },
             },
             msbuildPath: {
               type: "string",
-              description: "MSBuild.exe yolu (opsiyonel, varsayılan VS2022)",
-            },
-            maxRetries: {
-              type: "number",
-              description: "Maksimum deneme sayısı (varsayılan: 3)",
+              description: "MSBuild tam yolu (boşsa otomatik bulunur)",
             },
           },
-          required: [],
+          required: [], // <— ÖNEMLİ: hiçbir alanı zorunlu tutma; config varsayılan kullanılacak
         },
       },
     ],

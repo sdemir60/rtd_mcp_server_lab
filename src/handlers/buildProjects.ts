@@ -1,3 +1,13 @@
+/**
+ * handlers/buildProjects.ts
+ * Güvenli, log’lu ve varsayılan config’li "build_all_projects" handler’ı
+ * - Varsayılan config: config/build-config.json
+ * - Optional configName: config/build-config-<name>.json
+ * - Git: yalnız fast-forward pull, dirty ise atla, merge state => abort
+ * - TFS: pending varsa atla, get sırasında conflict olursa undo (rollback)
+ * - Derleme: MSBuild ile /m /v:m; süre ve özet log
+ * - Çıktı: Konsol + logs/build-<timestamp>.md (markdown)
+ */
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
@@ -10,425 +20,369 @@ const __dirname = dirname(__filename);
 
 const execAsync = promisify(exec);
 
+// ---------------- Types ----------------
+type VcsType = 'git' | 'tfs';
+
+interface VersionControlPath {
+  path: string;
+  type: VcsType;
+}
+
+interface ProjectItem {
+  path: string;             // absolute .sln or .csproj path
+  name?: string;            // display name
+  dependencies?: string[];  // optional build order hints (names)
+}
+
 interface BuildProjectsRequest {
-  useConfig?: boolean;
-  configName?: string;
-  versionControlPaths?: {
-    path: string;
-    type: 'git' | 'tfs';
-  }[];
-  projects?: {
-    path: string;
-    name: string;
-    dependencies?: string[];
-  }[];
-  msbuildPath?: string;
-  maxRetries?: number;
+  useConfig?: boolean;        // default true
+  configName?: string;        // e.g., "prod" -> config/build-config-prod.json
+  versionControlPaths?: VersionControlPath[];
+  projects?: ProjectItem[];
+  msbuildPath?: string;       // optional override
 }
 
 interface BuildResult {
   project: string;
   success: boolean;
-  error?: string;
   warnings?: string[];
+  error?: string;
 }
 
-export async function buildProjectsHandler(args: unknown) {
-  const inputRequest = args as BuildProjectsRequest;
-  
-  let request: BuildProjectsRequest = inputRequest;
-  
-  // Config dosyasından yükle (varsayılan olarak her zaman yükle)
-  if (inputRequest.useConfig !== false) {
-    const configData = await loadConfigFile(inputRequest.configName);
-    
-    // Config verilerini request ile birleştir (request parametreleri öncelikli)
-    request = {
-      ...configData,
-      ...inputRequest,
-      // Array'ler için özel birleştirme
-      versionControlPaths: inputRequest.versionControlPaths || configData.versionControlPaths,
-      projects: inputRequest.projects || configData.projects
-    };
-  }
-  
-  // Eğer hala temel veriler yoksa hata döndür
-  if (!request.projects || request.projects.length === 0) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `❌ **Konfigürasyon Hatası**
+// ---------------- Utils ----------------
+const isWin = process.platform === 'win32';
 
-Proje listesi bulunamadı. Aşağıdaki konumlardan birinde config dosyası oluşturun:
-
-📁 **Olası config konumları:**
-- \`config/build-config.json\` (varsayılan)
-- \`config/build-config-${inputRequest.configName || 'custom'}.json\` (özel)
-
-📝 **Örnek config dosyası:**
-\`\`\`json
-{
-  "versionControlPaths": [
-    {
-      "path": "D:/OSYSTFS/OSYS",
-      "type": "git"
-    }
-  ],
-  "projects": [
-    {
-      "path": "D:/Projects/MyApp/MyApp.csproj",
-      "name": "MyApp"
-    }
-  ],
-  "msbuildPath": "C:/Program Files/Microsoft Visual Studio/2022/Professional/MSBuild/Current/Bin/MSBuild.exe",
-  "maxRetries": 3
+function stamp() {
+  const d = new Date();
+  const iso = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString(); // local-ish
+  return iso.replace(/[:.]/g, '-');
 }
-\`\`\`
 
-**Kullanım:**
-- \`"Tüm projeleri derle"\` → build-config.json kullanır
-- \`"Production projelerini derle"\` → build-config-production.json kullanır`,
-        },
-      ],
-    };
+async function writeLogFile(markdown: string) {
+  const logsDir = path.join(process.cwd(), 'logs');
+  await fs.mkdir(logsDir, { recursive: true });
+  const file = path.join(logsDir, `build-${stamp()}.md`);
+  await fs.writeFile(file, markdown, 'utf8');
+  return file;
+}
+
+async function fileExists(p: string) {
+  try { await fs.access(p); return true; } catch { return false; }
+}
+
+async function resolveMsbuildPath(userProvided?: string) {
+  if (userProvided && await fileExists(userProvided)) return userProvided;
+  const candidates = [
+    'C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe',
+    'C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Professional\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe',
+    'C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe',
+    'C:\\\\Program Files (x86)\\\\Microsoft Visual Studio\\\\2019\\\\BuildTools\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe',
+  ];
+  for (const p of candidates) {
+    if (await fileExists(p)) return p;
   }
-  
-  const msbuildPath = request.msbuildPath || 'C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional\\MSBuild\\Current\\Bin\\MSBuild.exe';
-  const maxRetries = request.maxRetries || 3;
-  
-  let result = '# 🔨 Toplu Derleme İşlemi Başlatıldı\n\n';
-  
-  // Config bilgisini göster
-  if (request.configName || inputRequest.configName) {
-    result += `📋 **Konfigürasyon:** ${request.configName || inputRequest.configName}\n\n`;
-  } else {
-    result += `📋 **Konfigürasyon:** build-config.json (varsayılan)\n\n`;
+  // Son çare: PATH'te MSBuild varsayalım
+  return 'MSBuild.exe';
+}
+
+async function resolveTfPath() {
+  if (!isWin) return 'tf';
+  const candidates = [
+    'C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\Common7\\\\IDE\\\\CommonExtensions\\\\Microsoft\\\\TeamFoundation\\\\Team Explorer\\\\TF.exe',
+    'C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Professional\\\\Common7\\\\IDE\\\\CommonExtensions\\\\Microsoft\\\\TeamFoundation\\\\Team Explorer\\\\TF.exe',
+    'C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\Common7\\\\IDE\\\\CommonExtensions\\\\Microsoft\\\\TeamFoundation\\\\Team Explorer\\\\TF.exe',
+    'C:\\\\Program Files (x86)\\\\Microsoft Visual Studio\\\\2019\\\\Community\\\\Common7\\\\IDE\\\\CommonExtensions\\\\Microsoft\\\\TeamFoundation\\\\Team Explorer\\\\TF.exe',
+  ];
+  for (const p of candidates) {
+    if (await fileExists(p)) return `"${p}"`;
   }
-  
-  result += `📊 **Proje Sayısı:** ${request.projects.length}\n`;
-  result += `🔧 **MSBuild:** ${path.basename(msbuildPath)}\n\n`;
-  
+  return 'tf';
+}
+
+// küçük helper: komutu çalıştır, shell’i açık kullan (spawn ENOENT riskini azaltır)
+async function run(cmd: string, cwd?: string) {
+  const { stdout, stderr } = await execAsync(cmd, {
+    cwd,
+    maxBuffer: 20 * 1024 * 1024,
+    windowsHide: true,
+    shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh', // <-- string olmalı
+    encoding: 'utf8'
+  });
+  return (stdout || '') + (stderr || '');
+}
+
+
+// ---------------- Config ----------------
+async function loadConfig(
+  input: BuildProjectsRequest
+): Promise<Required<Pick<BuildProjectsRequest, 'versionControlPaths' | 'projects'>> & { msbuildPath?: string }> {
+  const useConfig = input.useConfig !== false; // default: true
+  let loaded: any = {};
+
+  if (useConfig) {
+    const baseDir = path.resolve(process.cwd(), 'config');
+    // YALNIZCA tek bir dosya: configName varsa build-config-<ad>.json; yoksa build-config.json
+    const file = input.configName
+      ? path.join(baseDir, `build-config-${input.configName}.json`)
+      : path.join(baseDir, 'build-config.json');
+
+    if (!(await fileExists(file))) {
+      throw new Error(
+        input.configName
+          ? `Config bulunamadı: ${file} (configName="${input.configName}")`
+          : `Config bulunamadı: ${file}`
+      );
+    }
+
+    const content = await fs.readFile(file, 'utf8');
+    try {
+      loaded = JSON.parse(content);
+    } catch {
+      throw new Error(`Config JSON parse hatası: ${file}`);
+    }
+  }
+
+  const versionControlPaths = input.versionControlPaths ?? loaded.versionControlPaths ?? [];
+  const projects = input.projects ?? loaded.projects ?? [];
+  const msbuildPath = input.msbuildPath ?? loaded.msbuildPath;
+
+  if (!projects.length) {
+    throw new Error(
+      'Config içindeki `projects` boş. Argümansız çalışmak için `config/build-config.json` (veya seçtiğin config) içinde `projects` dolu olmalı.'
+    );
+  }
+
+  return { versionControlPaths, projects, msbuildPath };
+}
+
+
+// ---------------- VCS: güvenli güncelleme ----------------
+async function updateGit(repoPath: string) {
+  const lines: string[] = [];
+  lines.push(`### 🔁 Git Update: \`${repoPath}\``);
   try {
-    // 1. Version Control İşlemleri (isteğe bağlı)
-    if (request.versionControlPaths && request.versionControlPaths.length > 0) {
-      result += '## 📥 Version Control Güncellemeleri\n\n';
-      const vcResults = await updateVersionControl(request.versionControlPaths);
-      
-      if (vcResults.hasConflict) {
-        result += '❌ **KONFLİKT TESPİT EDİLDİ!**\n\n';
-        result += '### Konflikt Detayları:\n';
-        for (const conflict of vcResults.conflicts) {
-          result += `- **${conflict.path}** (${conflict.type})\n`;
-          result += `  ${conflict.message}\n\n`;
-        }
-        result += '**İşlem iptal edildi.** Lütfen konfliktleri manuel olarak çözün.\n';
-        
-        return {
-          content: [
-            {
-              type: 'text',
-              text: result,
-            },
-          ],
-        };
-      }
-      
-      result += '✅ Tüm repository\'ler başarıyla güncellendi.\n\n';
-      for (const update of vcResults.updates) {
-        result += `- **${update.path}** (${update.type}): ${update.status}\n`;
-      }
-      result += '\n';
-    } else {
-      result += '⏭️ Version control güncellemesi atlandı.\n\n';
+    const status = await run('git status --porcelain', repoPath);
+    if (status.trim()) {
+      lines.push('- Yerel değişiklikler var → **güncelleme atlandı**.');
+      return { lines, conflict: false };
     }
-    
-    // 2. Projeler Derleniyor
-    result += '## 🗂️ Projeler Derleniyor\n\n';
-    const buildResults = await smartBuildSystem(request.projects, msbuildPath, maxRetries);
-    
-    // 3. Sonuç Raporu
-    result += '## 📊 Derleme Raporu\n\n';
-    
-    const successfulBuilds = buildResults.filter(r => r.success);
-    const failedBuilds = buildResults.filter(r => !r.success);
-    
-    result += `- **Başarılı:** ${successfulBuilds.length} proje\n`;
-    result += `- **Başarısız:** ${failedBuilds.length} proje\n`;
-    result += `- **Toplam:** ${buildResults.length} proje\n\n`;
-    
-    if (successfulBuilds.length > 0) {
-      result += '### ✅ Başarılı Projeler:\n';
-      for (const build of successfulBuilds) {
-        result += `- **${build.project}**\n`;
-        if (build.warnings && build.warnings.length > 0) {
-          result += `  ⚠️ ${build.warnings[0]}\n`;
-        }
-      }
-      result += '\n';
-    }
-    
-    if (failedBuilds.length > 0) {
-      result += '### ❌ Başarısız Projeler:\n';
-      for (const build of failedBuilds) {
-        result += `- **${build.project}**\n`;
-        if (build.error) {
-          // Sadece önemli hata mesajını göster
-          const errorLines = build.error.split('\n')
-            .filter(line => line.includes('error') || line.includes('Error'))
-            .slice(0, 2);
-          
-          if (errorLines.length > 0) {
-            result += `  \`\`\`\n${errorLines.join('\n')}\n  \`\`\`\n`;
-          }
-        }
-      }
-      result += '\n';
-    }
-    
-    // 4. Özet ve Öneriler
-    if (failedBuilds.length > 0) {
-      result += '## 💡 Öneriler:\n\n';
-      result += '1. Başarısız projelerin bağımlılıklarını kontrol edin\n';
-      result += '2. Visual Studio\'da Clean Solution yapıp tekrar deneyin\n';
-      result += '3. NuGet paket referanslarını kontrol edin\n';
-      result += '4. .NET Framework/Core versiyonlarını kontrol edin\n\n';
-    }
-    
-    // Genel başarı durumu
-    const successRate = Math.round((successfulBuilds.length / buildResults.length) * 100);
-    if (successRate === 100) {
-      result += '🎉 **Tüm projeler başarıyla derlendi!**\n';
-    } else if (successRate >= 80) {
-      result += `⚠️ **Derleme %${successRate} başarılı** - Bazı projeler başarısız oldu.\n`;
-    } else {
-      result += `❌ **Derleme %${successRate} başarılı** - Çok sayıda proje başarısız oldu.\n`;
-    }
-    
-    result += `\n⏱️ **İşlem Tamamlandı:** ${new Date().toLocaleTimeString('tr-TR')}\n`;
-    
-  } catch (error) {
-    result += `\n\n❌ **Kritik Hata:** ${error instanceof Error ? error.message : 'Bilinmeyen hata'}\n`;
-  }
-  
-  return {
-    content: [
-      {
-        type: 'text',
-        text: result,
-      },
-    ],
-  };
-}
-
-// Config dosyasını yükle - Production için optimize edilmiş
-async function loadConfigFile(configName?: string): Promise<BuildProjectsRequest> {
-  try {
-    const configFileName = configName ? `build-config-${configName}.json` : 'build-config.json';
-    
-    // MCP Server çalıştığında working directory Claude'un çalıştırdığı yerdir
-    // Bu yüzden __dirname kullanarak compiled dosya konumundan relative gideriz
-    const configPaths = [
-      // dist/config/build-config.json (npm run build ile kopyalanan)
-      path.join(__dirname, '..', 'config', configFileName),
-      // config/build-config.json (development durumunda)  
-      path.join(__dirname, '..', '..', 'config', configFileName),
-      // Absolute current working directory
-      path.join(process.cwd(), 'dist', 'config', configFileName),
-      path.join(process.cwd(), 'config', configFileName),
-    ];
-    
-    console.error(`🔍 Config aranıyor: ${configFileName}`);
-    console.error(`📁 __dirname: ${__dirname}`);
-    console.error(`📁 process.cwd(): ${process.cwd()}`);
-    
-    for (const configPath of configPaths) {
+    const before = (await run('git rev-parse --short HEAD', repoPath)).trim();
+    await run('git fetch --all --prune', repoPath);
+    try {
+      await run('git pull --ff-only', repoPath);
+      const after = (await run('git rev-parse --short HEAD', repoPath)).trim();
+      const changed = before !== after ? `Güncellendi (${before} → ${after})` : 'Zaten güncel';
+      lines.push(`- ${changed}`);
+    } catch {
+      // FF mümkün değil → pull yok. Olası merge state'i abort etmeyi deneyelim.
       try {
-        console.error(`🔎 Deneniyor: ${configPath}`);
-        await fs.access(configPath);
-        const configContent = await fs.readFile(configPath, 'utf8');
-        const config = JSON.parse(configContent);
-        
-        console.error(`✅ Config bulundu ve yüklendi: ${configPath}`);
-        console.error(`📊 Proje sayısı: ${config.projects?.length || 0}`);
-        console.error(`🔧 Version control: ${config.versionControlPaths?.length || 0} path`);
-        
-        return config;
-      } catch (err) {
-        console.error(`❌ Bulunamadı: ${configPath}`);
-        continue;
-      }
+        const mergeHeadPath = path.join(repoPath, '.git', 'MERGE_HEAD');
+        if (await fileExists(mergeHeadPath)) await run('git merge --abort', repoPath);
+      } catch {}
+      lines.push('- ⚠️ Fast-forward **mümkün değil** veya pull çatıştı → **manuel rebase/pull** gerekli.');
+      return { lines, conflict: true };
     }
-    
-    // Hiç config bulunamadı - detaylı hata
-    console.error(`❌ Config dosyası bulunamadı: ${configFileName}`);
-    console.error(`🔍 Aranan konumlar:`);
-    configPaths.forEach((p, i) => console.error(`  ${i + 1}. ${p}`));
-    
-    // Working directory'deki dosyaları listele
-    try {
-      const cwdFiles = await fs.readdir(process.cwd());
-      console.error(`📁 Working directory içeriği: ${cwdFiles.join(', ')}`);
-      
-      if (cwdFiles.includes('config')) {
-        const configFiles = await fs.readdir(path.join(process.cwd(), 'config'));
-        console.error(`📁 Config klasörü içeriği: ${configFiles.join(', ')}`);
-      }
-    } catch (err) {
-      console.error(`⚠️ Directory listelenemedi`);
-    }
-    
-    return {} as BuildProjectsRequest;
-    
-  } catch (error) {
-    console.error('💥 Config yükleme hatası:', error);
-    return {} as BuildProjectsRequest;
+  } catch (e: any) {
+    lines.push(`- Hata: ${e?.message || e}`);
   }
+  return { lines, conflict: false };
 }
 
-// Version Control güncelleme
-async function updateVersionControl(paths: any[]) {
-  const results = {
-    hasConflict: false,
-    conflicts: [] as any[],
-    updates: [] as any[]
-  };
-  
-  for (const vcPath of paths) {
-    try {
-      if (vcPath.type === 'git') {
-        // Git pull
-        const { stdout, stderr } = await execAsync(`git pull`, { cwd: vcPath.path });
-        
-        if (stderr && (stderr.toLowerCase().includes('conflict') || stderr.toLowerCase().includes('merge'))) {
-          results.hasConflict = true;
-          results.conflicts.push({
-            path: vcPath.path,
-            type: 'git',
-            message: stderr
-          });
-        } else {
-          results.updates.push({
-            path: vcPath.path,
-            type: 'git',
-            status: stdout.includes('Already up to date') || stdout.includes('Already up-to-date') 
-              ? 'Zaten güncel' : 'Güncellendi'
-          });
-        }
-      } else if (vcPath.type === 'tfs') {
-        // TFS get latest
-        const { stdout, stderr } = await execAsync(`tf get /recursive`, { cwd: vcPath.path });
-        
-        if (stderr && stderr.toLowerCase().includes('conflict')) {
-          results.hasConflict = true;
-          results.conflicts.push({
-            path: vcPath.path,
-            type: 'tfs',
-            message: stderr
-          });
-        } else {
-          results.updates.push({
-            path: vcPath.path,
-            type: 'tfs',
-            status: 'Güncellendi'
-          });
-        }
-      }
-    } catch (error) {
-      // Version control hatası - kritik olmayan hata
-      results.updates.push({
-        path: vcPath.path,
-        type: vcPath.type,
-        status: `Hata: ${error}`
-      });
-    }
-  }
-  
-  return results;
-}
-
-// Akıllı derleme sistemi
-async function smartBuildSystem(projects: any[], msbuildPath: string, maxRetries: number): Promise<BuildResult[]> {
-  let results: BuildResult[] = [];
-  let remainingProjects = [...projects];
-  let retryCount = 0;
-  let previousFailCount = projects.length + 1;
-  
-  while (remainingProjects.length > 0 && retryCount < maxRetries) {
-    console.error(`Derleme turı ${retryCount + 1}/${maxRetries}: ${remainingProjects.length} proje`);
-    
-    const currentResults: BuildResult[] = [];
-    const failedProjects: any[] = [];
-    
-    for (const project of remainingProjects) {
-      console.error(`Derleniyor: ${project.name}`);
-      const buildResult = await buildProject(project, msbuildPath);
-      currentResults.push(buildResult);
-      
-      if (!buildResult.success) {
-        failedProjects.push(project);
-      }
-    }
-    
-    results = currentResults;
-    
-    // Eğer başarısız proje sayısı azalıyorsa devam et
-    if (failedProjects.length < previousFailCount && failedProjects.length > 0) {
-      previousFailCount = failedProjects.length;
-      remainingProjects = failedProjects;
-      retryCount++;
-      
-      // Kısa bir bekleme süresi
-      console.error(`${failedProjects.length} proje başarısız, yeniden denenecek...`);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    } else {
-      break;
-    }
-  }
-  
-  return results;
-}
-
-// Tek bir projeyi derle
-async function buildProject(project: any, msbuildPath: string): Promise<BuildResult> {
-  const result: BuildResult = {
-    project: project.name,
-    success: false
-  };
-  
+async function updateTfs(workspacePath: string, tfPath: string) {
+  const lines: string[] = [];
+  lines.push(`### 🔁 TFS Get Latest: \`${workspacePath}\``);
   try {
-    // MSBuild komutu
-    const command = `"${msbuildPath}" "${project.path}" /t:Build /p:Configuration=Debug /p:Platform=AnyCPU /m /v:m /nologo`;
-    
-    const { stdout, stderr } = await execAsync(command, {
-      cwd: path.dirname(project.path),
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-      timeout: 300000 // 5 dakika timeout
-    });
-    
-    // Build başarılı mı kontrol et
-    const output = stdout + stderr;
-    
-    if (output.includes('Build succeeded') || output.includes('0 Error(s)')) {
-      result.success = true;
-      
-      // Warning'leri topla
-      const warningMatch = output.match(/(\d+) Warning\(s\)/);
-      if (warningMatch && parseInt(warningMatch[1]) > 0) {
-        result.warnings = [`${warningMatch[1]} warning bulundu`];
-      }
-    } else {
-      result.success = false;
-      result.error = output;
+    // Pending changes kontrolü
+    const stat = await run(`${tfPath} status /recursive /format:brief`, workspacePath);
+    if (stat && stat.trim() && !/^There are no pending changes/i.test(stat.trim())) {
+      lines.push('- Pending changes tespit edildi → **güncelleme atlandı**.');
+      return { lines, conflict: false };
     }
-  } catch (error: any) {
-    result.success = false;
-    if (error.code === 'ETIMEDOUT') {
-      result.error = 'Derleme timeout süresi aşıldı (5 dakika)';
+
+    const out = await run(`${tfPath} get /recursive /noprompt`, workspacePath);
+    const lowered = out.toLowerCase();
+    if (lowered.includes('conflict')) {
+      try { await run(`${tfPath} undo /recursive`, workspacePath); } catch {}
+      lines.push('- ⚠️ Get sırasında **conflict** oluştu → otomatik **undo** yapıldı. Lütfen manuel çözün.');
+      return { lines, conflict: true };
+    }
+    lines.push('- Güncellendi');
+  } catch (e: any) {
+    lines.push(`- Hata: ${e?.message || e}`);
+  }
+  return { lines, conflict: false };
+}
+
+async function updateVersionControl(versionControlPaths: VersionControlPath[]) {
+  const tfPath = await resolveTfPath();
+  const sections: string[] = [];
+  let hasAnyConflict = false;
+
+  for (const vc of versionControlPaths) {
+    if (vc.type === 'git') {
+      const { lines, conflict } = await updateGit(vc.path);
+      sections.push(lines.join('\n'));
+      hasAnyConflict ||= conflict;
+    } else if (vc.type === 'tfs') {
+      const { lines, conflict } = await updateTfs(vc.path, tfPath);
+      sections.push(lines.join('\n'));
+      hasAnyConflict ||= conflict;
     } else {
-      result.error = error.message || 'Derleme hatası';
+      sections.push(`### ❓ Bilinmeyen VCS tipi: ${vc.type} (${vc.path})`);
     }
   }
-  
-  return result;
+
+  return { text: sections.join('\n\n'), hasConflict: hasAnyConflict };
 }
+
+// ---------------- Build ----------------
+async function buildProject(project: ProjectItem, msbuildExe: string): Promise<BuildResult> {
+  const name = project.name || path.basename(project.path);
+  const started = Date.now();
+  let output = '';
+  try {
+    const cmd = `"${msbuildExe}" "${project.path}" /t:Build /p:Configuration=Debug /p:Platform=AnyCPU /m /v:m /nologo`;
+    output = await run(cmd, path.dirname(project.path));
+    // Başarı sezgisi: "Build succeeded" veya "0 Error(s)"
+    const ok = /Build succeeded/i.test(output) || /\b0\s+Error\(s\)/i.test(output);
+    const warnMatch = output.match(/(\d+)\s+Warning\(s\)/i);
+    const took = Math.round((Date.now() - started) / 1000);
+    return {
+      project: name,
+      success: ok,
+      warnings: [
+        ...(warnMatch && parseInt(warnMatch[1]) > 0 ? [`${warnMatch[1]} warning`] : []),
+        `Süre: ${took}s`
+      ],
+      error: ok ? undefined : output
+    };
+  } catch (e: any) {
+    const took = Math.round((Date.now() - started) / 1000);
+    return {
+      project: name,
+      success: false,
+      warnings: [`Süre: ${took}s`],
+      error: e?.code === 'ETIMEDOUT' ? 'Derleme timeout (varsayılan ~5 dk)' : (e?.message || 'Derleme hatası')
+    };
+  }
+}
+
+function orderByDependencies(projects: ProjectItem[]) {
+  // Basit topo-sort; name olmayanları olduğu gibi bırakır
+  const nameToProj = new Map<string, ProjectItem>();
+  for (const p of projects) if (p.name) nameToProj.set(p.name, p);
+  const visited = new Set<ProjectItem>();
+  const stack = new Set<ProjectItem>();
+  const result: ProjectItem[] = [];
+
+  function visit(p: ProjectItem) {
+    if (visited.has(p)) return;
+    if (stack.has(p)) { // cycle
+      result.push(p); visited.add(p); return;
+    }
+    stack.add(p);
+    const deps = p.dependencies || [];
+    for (const d of deps) {
+      const dp = nameToProj.get(d);
+      if (dp) visit(dp);
+    }
+    stack.delete(p);
+    visited.add(p);
+    result.push(p);
+  }
+
+  for (const p of projects) visit(p);
+  // unique preserve order
+  const seen = new Set<ProjectItem>();
+  return result.filter(p => { if (seen.has(p)) return false; seen.add(p); return true; });
+}
+
+// ---------------- Markdown compose ----------------
+function header(title: string) {
+  return `# ${title}\n\n`;
+}
+
+function fenced(code: string) {
+  const truncated = code.length > 4000 ? code.slice(0, 4000) + '\n... (çıktı kısaltıldı)' : code;
+  return `\n<details><summary>Çıktı</summary>\n\n\`\`\`\n${truncated}\n\`\`\`\n</details>\n`;
+}
+
+// ---------------- Handler ----------------
+export async function buildProjectsHandler(request: any) {
+  // Argümanlar verilmediyse config'ten oku. Kullanıcıdan **asla** bilgi isteme.
+  const argsRaw =
+    (request?.params?.arguments && (request.params.arguments[0] || request.params.arguments)) ||
+    (request?.arguments) ||
+    request ||
+    {};
+  const args: BuildProjectsRequest = typeof argsRaw === 'object' ? argsRaw : {};
+
+  let md: string[] = [];
+  md.push(header('🏗️ Toplu Derleme (build_all_projects)'));
+  md.push(`- Başlangıç: **${new Date().toLocaleString()}**`);
+  md.push(`- Çalışma dizini: \`${process.cwd()}\``);
+
+  try {
+    // Config yükle
+    const { versionControlPaths, projects, msbuildPath } = await loadConfig(args);
+    const msbuildExe = await resolveMsbuildPath(msbuildPath);
+
+    md.push('\n## 1) Version Control Güncellemesi\n');
+    if (versionControlPaths.length) {
+      const vcsRes = await updateVersionControl(versionControlPaths);
+      md.push(vcsRes.text);
+      if (vcsRes.hasConflict) {
+        md.push('\n> ⚠️ Bazı depolarda otomatik çözülemeyen durumlar var. Derleme devam ediyor; ilgili depo(lar) için manuel işlem gerekebilir.');
+      }
+    } else {
+      md.push('- VCS yolları tanımlı değil → bu adım atlandı.');
+    }
+
+    // Build order
+    const ordered = orderByDependencies(projects);
+
+    md.push('\n## 2) Derleme\n');
+    md.push(`Toplam proje: **${projects.length}** (sıralı: **${ordered.length}**)`);
+    md.push(`\nMSBuild: \`${msbuildExe}\``);
+
+    const results: BuildResult[] = [];
+    for (const p of ordered) {
+      md.push(`\n### 🔨 ${p.name || path.basename(p.path)}\n`);
+      const r = await buildProject(p, msbuildExe);
+      results.push(r);
+      if (r.success) {
+        md.push(`- ✅ Başarılı ${r.warnings?.length ? `(${r.warnings?.join(', ')})` : ''}`);
+      } else {
+        md.push(`- ❌ Hata`);
+        if (r.error) md.push(fenced(r.error));
+      }
+    }
+
+    // Özet
+    const okCount = results.filter(r => r.success).length;
+    const failCount = results.length - okCount;
+
+    md.push('\n## 3) Özet\n');
+    md.push(`- ✅ Başarılı: **${okCount}**`);
+    md.push(`- ❌ Hatalı: **${failCount}**`);
+    if (failCount > 0) {
+      md.push('\n### Hatalı Projeler');
+      for (const r of results.filter(r => !r.success)) {
+        md.push(`- ${r.project}`);
+      }
+    }
+
+    const allText = md.join('\n');
+    const logFile = await writeLogFile(allText);
+    const finalOut = `${allText}\n\n🗂️ **Log dosyası**: ${logFile}\n`;
+
+    return { content: [{ type: 'text', text: finalOut }] };
+  } catch (e: any) {
+    const errorText = `❌ **Çalıştırma Hatası**\n\n- ${e?.message || e}\n`;
+    const finalOut = md.concat('\n', errorText).join('\n');
+    try { const f = await writeLogFile(finalOut); md.push(`\n🗂️ **Log dosyası**: ${f}`); } catch {}
+    return { content: [{ type: 'text', text: finalOut }] };
+  }
+}
+
+export default buildProjectsHandler;
